@@ -1,137 +1,244 @@
-# Portable, Transferable, Standardised Codeplug Description
+# Portable, Transferable, Standardised Codeplug (PTSCD) proposal
 
-PTSCD is a standardised codeplug format that aims to be portable, transferable and cross-platform. This standard contains two parts. Part 1 is the full standard. It is meant to be readable and writable from low-power devices (like handheld transceivers) that are powerful enough and have enough memory space. Part 2 is a condensed version of the part 1. It is meant as a read-only, condensed form of the full standard for lower-power devices or with limited memory space available.
+This is the *Part 2* codeplug structure.
+*Part 1* can be derived directly from it by splitting chunks into separate files.
 
-## Part 1
+## Chunks
+The default byte order is little-endian, unless specified otherwise.
 
-This part of the standard is the "full" standard. It is implemented over a filesystem on which 5 files will be stored. Each file will store specific data. All files (except for the file containing the blobs) have fixed size entries. This is intended to keep fragmentation low.
-The main file is named "ptscd.dat" and has a specific header identifying the version and the part of the standard as well as data about the other files.
+#### Data integrity
+The default CRC type used is the standard CRC-32 *\[we may specify the details if required\]*.
+Data integrity of every chunk (except `MAGIC`, whose fixed content is validated by exact match)
+is guaranteed by its own CRC.
+The input to CRC is everything in a given chunk, except for the CRC field itself.
+Any padding uses zero-valued bytes or bits.
 
-When programmed into a user device, it must be at the root of the filesystem and the blob file must be named `ptscd.dat`.
+#### Size
+`ChunkSize` holds byte count of the whole chunk, including its 4-character designator.
+This applies to tagged, optional chunks (`KEYS`, `DIAL`, `CONT`, and any future additions).
+Any future optional chunk type must begin with a 4-character tag followed by a `ChunkSize` field,
+so that parsers which do not recognize it can skip it safely.
 
-## Part 2
+### MAGIC chunk (12 bytes)
+  ```
+  [ "PTSCD 1.0 p2" ]
+  ```
 
-This part of the standard is the "condensed" standard. It can be implemented over a filesystem or it can be implemented "baremetal" directly in the memory. It is read-only and cannot be modified on the device.
+### META chunk (56 bytes)
+  ```
+  META_CHUNK = [
+    CreatedAt (4B, unix epoch),
+    Author (32B, null-padded),
+    ToolVersion (16B, null-padded),
+    ChunkCRC (4B),
+  ]
+  ```
 
-## Files
+### CDAT chunk (**Channel DATa**, 24 bytes per entry)
+Chunk structure:
+  ```
+  CDAT_CHUNK = [
+    NumChannels (2B),
+    NumChannels * CHANNEL_DATA,
+    Pad (2B),
+    ChunkCRC (4B),
+  ]
+  ```
 
-This section describe the layout of the various files used for the standard.
+The following structure is repeated for every channel entry:
+  ```
+  CHANNEL_DATA = [
+    FreqRX (4B),
+    FreqTX (4B),
+    RFPower (1B),
+    Mode (1B),
+    Flags (2B),
+    NameRef (2B),
+    PerModeData (9B),
+    Pad (1B),
+  ]
+  ```
 
-### Blob
-
-The blob file is the main file of this standard. It must be named `ptscd.dat`. It contains the main header with important information for the device. In the case of part 2, this may be a file, or not.
-
-#### Main header
-
-The main header starts with text `PTSCD` followed by a single space followed by the version in format `major.minor`(currently, `0.1`) followed by the part of the standard (`p1` for part 1 and `p2` for part 2) followed .
-
-The rest of the header depends on the part of the standard.
-
-##### Part 1
-
-In case the part 1 is followed, the rest of the header contains a list of filenames in the form of null-terminated strings. Each string must be at most 32 characters long and in ASCII. The filenames are in the following order:
-
- * channels
- * contacts
- * groups
-
-If any of those filenames is 0 length, this means that the codeplug does not contain any such entries. This also means that the radio will not be able to write to any of those files. So if the codeplug simply contains no such data but that the radio must be able to create such entries, the codeplug should contain an empty file and its name should be present in the list.
-
-##### Part 2
-
-In case the part 2 of the standard is followed, the rest of the header contains offsets at which each section starts. Each offset is expressed as a 32 bits number and is the offset in bytes from the beginning of the file. If this offset is 0 this means that the codeplug does not contain any such entries. The offset must be in this order:
-
- * channels
- * contacts
- * groups
-
-#### Content
-
-The content of the blob file is defined as follows:
-
-### channels
-
-| ID  | FREQ RX | FREQ TX | Squelch | Power | Mode | QA Params | BLOB_ID | Total    |
-|---- |---------|---------|---------|-------|------|-----------|---------|----------|
-| 2 B | 4 B     | 4 B     | 1 B     | 1 B   | 1B   | 2 B       | 2 B     | 17 bytes |
-
- * `ID` is the channel number. Odd channels are active, even channels are deleted channels.
- * `Mode` is the operating mode.
-
-    0) for NBFM (12.5 kHz BW)
-    1) for FM (25 kHz BW)
-    1) for BCFM (RX only?)
-    1) for USB
-    1) for LSB
-    1) for CW
-    1) for RTTY
-    1) for APRS
-    1) for M17
-    1) for DStar
-    1) for DMR
-    1) for YSF (NB)
-    1) for YSF (WB)
-    1) for P25
-    1) for NXDN
-    1) for Tetra
-    1) for POCSAG
-    1) for dPMR
-    1) for PMR446
-    * Modes values 250 - 255 are explicitely not defined and are to be used for custom, implementation specific modes. That is, codeplugs using those values for Operating Modes are not expected to be portable and transferable
-
-
- * `QA Params` Are Quick Access parameters that need to be accessed fast when scanning frequencies. Those are mode dependant.
-
-### groups
-
-| ID | BLOB_ID | Total |
-|----|---------|-------|
-| 2B | 2B      | 4 bytes |
-
-    blob contains the list of channels in the group. Bounded to 32 (or so) channels
-
-### contacts
-
-CS () | .. | ... | BLOB_ID
+Available modes:
+| `Mode`   | Meaning                   |
+|----------|---------------------------|
+| 0x00     | FM                        |
+| 0x01     | AM                        |
+| 0x02     | LSB                       |
+| 0x03     | USB                       |
+| 0x04     | CW                        |
+| 0x05     | RTTY                      |
+| 0x06     | APRS                      |
+| 0x07     | YSF                       |
+| 0x08     | DMR                       |
+| 0x09     | P25                       |
+| 0x0A     | NXDN                      |
+| 0x0B     | TETRA                     |
+| 0x0C     | POCSAG                    |
+| 0x0D     | dPMR                      |
+| 0x0E     | PMR446                    |
+| 0x0F     | D-Star                    |
+| 0x10     | LoRa                      |
+| 0x11     | M17                       |
+| 0x12     | FreeDV                    |
+| *other*  | *reserved*                |
 
 
-### Blobs
-
-BLOB_ID (2 bytes) | BLOB_SIZE (1 byte) | BLOB_DATA (var length)
-
-
-FM :
-    QA Params: CTCSS RX code (6 bits) | CTCSS TX Code (6 bits)
-    Blob: Name
-
-M17 :
-    QA Params: CAN (3 bits) |
-    Blob: DST |
+Per-mode data (always 9 bytes, unused space is zero-padded):
+| Mode         | Structure (field sizes in bytes)                  |
+|--------------|---------------------------------------------------|
+| CW           | BW (1)                                            |
+| LSB/USB      | BW (1)                                            |
+| FM           | CTCSS_RX (1), CTCSS_TX (1), BW (1)                |
+| TETRA        | ISSI (3), GSSI (3), CallType (1)                  |
+| M17          | CAN (1), DST base40 (6), EncrKey (1), SignKey (1) |
+| DMR          | CC/TS (1), TG (3), EncrKey (1)                    |
+| *other*      | *TBF*                                             |
 
 Note:
-The smallest channel is 16 bytes and at least 20 bytes with a blob (16 in channel file and 4 in blob file). With blob ID of 2 bytes, it means that we can at most use 1.25 MB of flash. If we consider at least 10 bytes in blob, this still makes for 29 bytes per channel (65536 channels = 1.8 MB).
-With large Flash memories, (i.e. 32 MB) we would need 65536 channels using 512 B each to fill-up the memory.
-Should we consider using larger IDs / blob IDs ?
+  - The `CC/TS` field structure is `(CC<<1) | TS`.
+  - `NameRef` points directly to a `NAME` chunk entry.
+  - CTCSS frequencies are referenced by a look-up table ID. A value of 0 means that a particular CTCSS is unused.
+  - `BW` byte defines the channel width: 0: 100Hz, 1: 2.7kHz, 2:6.25kHz, 3: 12.5kHz, 4: 25kHz, 5: 180kHz, and possibly other values for CW/SSB/LoRa/WBFM.
+  - `CallType` is TETRA-specific.
 
-As a comparison, here are a few common radios with the size of their external flash and advertised number of channels / contacts
+Flags:
+| Bit     | Meaning                                      |
+|---------|----------------------------------------------|
+| 0       | active                                       |
+| 1       | skip scan                                    |
+| 2       | inhibit TX                                   |
+| 3       | bookmark/star/favorite                       |
+| 4       | encrypted                                    |
+| 5       | signed                                       |
+| 6       | direct/repeater mode                         |
+| *other* | *reserved*                                   |
 
-MD-UV380
-16 MB -> 3000 channels, 10k contacts
+Notes:
+  - Frequencies are stored as `uint32_t`, unit: Hz.
+  - Power is stored as `uint8_t` with 0.25dBm steps (`dec = enc \* 0.25dBm`). This covers 1mW up to over 2kW.
+  - `EncrKey` and `SignKey` point to `KEYS` chunk entries for both encryption and authentication (private keys for signatures). Both fields can be left unused if the correcsponding flags are not set.
+  - `NameRef` points to a `NAME` chunk entry.
 
-GD-77
-1 MB -> 1024 channels, ?? contacts
+### NAME  chunk (32 bytes per entry)
+Chunk structure:
+  ```
+  NAME_CHUNK = [
+    NumNames (2B),
+    NumNames * NAME_DATA,
+    Pad (2B),
+    ChunkCRC (4B),
+  ]
+  ```
 
-CS-7000
-16 MB  -> (65280 contacts, CS760)
-CS-7000 Plus
-32 MB
+The following structure is repeated for every name entry:
+  ```
+  NAME_DATA = [
+    Name (32B, zero-padded),
+  ]
+  ```
 
+### KEYS chunk (36 bytes per entry)
+`KEYS` chunk is present only if required. Maximum key length is 256 bits.
 
-## What needs to be done?
+Chunk structure:
+  ```
+  KEYS_CHUNK = [
+    "KEYS",
+    ChunkSize (2B),
+    NumKeys (1B),
+    NumKeys * KEY_DATA,
+    Pad (1B),
+    ChunkCRC (4B),
+  ]
+  ```
 
-* Understand how DMR codeplugs work? Have an idea of what is stored in a typical DMR contact
-* Define the values to use for Squelch, power, ...
-* Does BCFM need to be split in EU/US BCFM?
-* Another way to handle modes would be to have a mode and submode field so that FM bandwidth / modulation factors can be classified as submodes of FM, it also make it easier to add subtly different modes like Reverse RTTY, reverse CW, or (let's be crazy) Codec2 Over DStar. The common denominator for mode would be that they use the same QA params and blob content. Otherwise it is another mode.
-    * Suggestion -> Merge QA Params and mode to a new 4B long Mode. 1B for mode, 4b for submode, 20b for QA Params
-* Define content of contact entry
+The following structure is repeated for every key entry:
+  ```
+  KEY_DATA = [
+    Algorithm (1B),
+    KeyLen (1B),
+    KeyData (32B, zero-padded),
+    Pad (2B),
+  ]
+  ```
+
+Encryption/authentication algorithms:
+| Algorithm ID | Name                            |
+|--------------|---------------------------------|
+| 0x00         | Scrambler                       |
+| 0x01         | AES                             |
+| 0x02         | RC4                             |
+| 0x03         | TEA-1                           |
+| 0x04         | TEA-2                           |
+| 0x05         | TEA-3                           |
+| 0x06         | TEA-4                           |
+| 0x07         | ECDSA (secp256r1 curve)         |
+| *other*      | *reserved*                      |
+
+Notes:
+  - `KeyLength` is the key size in bits.
+
+### DIAL chunk (8 bytes per entry)
+This is a quick-dial list. The user selects an entry that configures the radio.
+The `DIAL` chunk is present only if required/used.
+
+Chunk structure:
+  ```
+  DIAL_CHUNK = [
+    "DIAL",
+    ChunkSize (4B),
+    NumDial (2B),
+    NumDial * DIAL_DATA,
+    Pad (2B),
+    ChunkCRC (4B),
+  ]
+  ```
+
+The following structure is repeated for every contact entry:
+  ```
+  DIAL_DATA = [
+    NAMEChunkLoc (2B),
+    CDATAChunkLoc (2B),
+    KEYSChunkLoc (1B),
+    Pad (3B),
+  ]
+  ```
+
+### CONT chunk (12 bytes per entry)
+This is the contact list - a look-up table for mode-dependent indentifiers (IDs).
+The `CONT` chunk is present only if required/used. The contents should be sorted by (`Kind`, `ID`).
+That allows the look-up table to be searched using binary search.
+
+Chunk structure:
+  ```
+  CONT_CHUNK = [
+    "CONT",
+    ChunkSize (4B),
+    NumCont (2B),
+    NumCont * CONT_DATA,
+    Pad (2B),
+    ChunkCRC (4B),
+  ]
+  ```
+
+The following structure is repeated for every contact entry:
+  ```
+  CONT_DATA = [
+    Kind (1B),
+    ID (6B),
+    NAMEChunkLoc (2B),
+    Pad (3B),
+  ]
+  ```
+
+Valid `Kind` fields are:
+| `Kind`  | Meaning                   |
+|---------|---------------------------|
+| 0x00    | DMR talkgroup ID          |
+| 0x01    | DMR private call ID       |
+| 0x02    | M17 SRC ID                |
+| 0x03    | M17 reflector ID          |
+| 0x04    | TETRA ISSI                |
+| 0x05    | TETRA GSSI                |
+| *other* | *reserved*                |
